@@ -109,9 +109,39 @@ friendlyPlayers.put(id, new Player(player2));
 				}
 			}
 
-		});
+		}).on("Player Disconnected:", new Emitter.Listener() {
+            @Override
+            public void call(Object... args) {
+                JSONObject data = (JSONObject)args[0];
+                try{	String id = data.getString("id");
+                  friendlyPlayers.remove(id);
+                }catch(JSONException e){
+                    Gdx.app.log("SocketIO","Error getting New Player ID");
+                }
+            }
 
-	}
+        }).on("getPlayers", new Emitter.Listener() {
+
+		@Override
+		public void call(Object... args) {
+			JSONArray objects = (JSONArray) args[0];
+			try {
+				for (int i = 0; i < objects.length(); i++) {
+					Player coopPlayer = new Player(player2);
+					Vector2 position = new Vector2();
+					position.x = ((Double)objects.getJSONObject(i).getDouble("x")).floatValue();
+					position.y = ((Double)objects.getJSONObject(i).getDouble("y")).floatValue();
+				coopPlayer.setPosition(position.x,position.y);
+				friendlyPlayers.put(objects.getJSONObject(i).getString("id"),coopPlayer);
+				}
+			} catch (JSONException e) {
+
+			}
+		}
+	});
+
+
+}
 
 
 }
