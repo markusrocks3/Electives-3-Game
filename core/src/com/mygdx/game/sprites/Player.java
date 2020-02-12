@@ -10,7 +10,9 @@ public Player (Texture texture){
     super(texture);
     previousPosition = new Vector2(getX(),getY());
 }
-public boolean hasMoved(){
+public boolean hasMoved()
+
+{
     if(previousPosition.x != getX() || previousPosition.y != getY()){
         previousPosition.x = getX();
         previousPosition.y = getY();

@@ -4,6 +4,7 @@ import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.math.Vector2;
@@ -14,7 +15,6 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.HashMap;
-import java.util.Iterator;
 import io.socket.client.IO;
 import io.socket.client.Socket;
 import io.socket.emitter.Emitter;
@@ -22,12 +22,20 @@ import io.socket.emitter.Emitter;
 public class MyGdxGame extends ApplicationAdapter {
 	private final float UPDATE_TIME = 1/60f;
 	float timer;
-	SpriteBatch batch;
+	private SpriteBatch batch;
 	private Socket socket;
 	Player player;
 	Texture player1;
 	Texture player2;
 	HashMap<String, Player> friendlyPlayers;
+
+	public static final int V_WIDTH = 1280;
+	public static final int V_HEIGHT = 720;
+	public static float SCALE;
+
+	public MyGdxGame(){}
+
+
 
 	@Override
 	public void create () {
@@ -37,6 +45,7 @@ public class MyGdxGame extends ApplicationAdapter {
 		friendlyPlayers = new HashMap<String, Player>();
 		connectSocket();
 		configSocketEvents();
+
 	}
 
 	@Override
@@ -52,19 +61,27 @@ public class MyGdxGame extends ApplicationAdapter {
 		for(HashMap.Entry<String, Player> entry : friendlyPlayers.entrySet()) {
 			entry.getValue().draw(batch);
 		}
+
 		batch.end();
 	}
 
 	public void handleInput(float delta) {
-		if(player!= null) {
-			if(Gdx.input.isKeyPressed(Input.Keys.LEFT)) {
-				player.setPosition(player.getX() -200 * delta, player.getY());
-			} else if(Gdx.input.isKeyPressed(Input.Keys.RIGHT)) {
+		if (player != null) {
+
+			if (Gdx.input.isKeyPressed(Input.Keys.LEFT)) {
+				player.setPosition(player.getX() - 200 * delta, player.getY());
+			} if (Gdx.input.isKeyPressed(Input.Keys.RIGHT)) {
 				player.setPosition(player.getX() + 200 * delta, player.getY());
+			}
+
+
+			if (Gdx.input.isKeyPressed(Input.Keys.UP)) {
+				player.setPosition(player.getX() , player.getY()+ 200 * delta);
+			}if (Gdx.input.isKeyPressed(Input.Keys.DOWN)) {
+				player.setPosition(player.getX() , player.getY()- 200 * delta);
 			}
 		}
 	}
-
 	public void connectSocket() {
 		try {
 			socket = IO.socket("http://localhost:8080");
