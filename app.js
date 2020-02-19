@@ -36,6 +36,8 @@ var Player = function (startX, startY, startAngle) {
   this.speed = 500;
   //We need to intilaize with true.
   this.sendData = true;
+  this.size = getRndInteger(40, 100); 
+  this.dead = false;
 }
 
 //We call physics handler 60fps. The physics is calculated here. 
@@ -71,12 +73,16 @@ function onNewplayer (data) {
 	
 	console.log("created new player with id " + this.id);
 	newPlayer.id = this.id; 	
+	
+	this.emit('create_player', {size: newPlayer.size});
+	
 	//information to be sent to all clients except sender
 	var current_info = {
 		id: newPlayer.id, 
 		x: newPlayer.x,
 		y: newPlayer.y,
 		angle: newPlayer.angle,
+		size: newPlayer.size
 	}; 
 	
 	//send to the new player about everyone who is already connected. 	
@@ -86,7 +92,8 @@ function onNewplayer (data) {
 			id: existingPlayer.id,
 			x: existingPlayer.x,
 			y: existingPlayer.y, 
-			angle: existingPlayer.angle,			
+			angle: existingPlayer.angle,	
+			size: existingPlayer.size
 		};
 		console.log("pushing player");
 		//send message to the sender-client only
@@ -100,31 +107,12 @@ function onNewplayer (data) {
 	player_lst.push(newPlayer); 
 }
 
-
-//we're not using this anymore
-function onMovePlayer (data) {
-	var movePlayer = find_playerid(this.id); 
-	movePlayer.x = data.x;
-	movePlayer.y = data.y;
-	movePlayer.angle = data.angle; 
-	
-	var moveplayerData = {
-		id: movePlayer.id,
-		x: movePlayer.x,
-		y: movePlayer.y, 
-		angle: movePlayer.angle
-	}
-	
-	//send message to every connected client except the sender
-	this.broadcast.emit('enemy_move', moveplayerData);
-}
-
 //instead of listening to player positions, we listen to user inputs 
 function onInputFired (data) {
 	var movePlayer = find_playerid(this.id, this.room); 
 	
 	
-	if (!movePlayer) {
+	if (!movePlayer || movePlayer.dead) {
 		return;
 		console.log('no player'); 
 	}
@@ -155,6 +143,9 @@ function onInputFired (data) {
 		movePlayer.playerBody.angle = physicsPlayer.movetoPointer(movePlayer, movePlayer.speed, serverPointer);	
 	}
 	
+	movePlayer.x = movePlayer.playerBody.position[0]; 
+	movePlayer.y = movePlayer.playerBody.position[1];
+	
 	//new player position to be sent back to client. 
 	var info = {
 		x: movePlayer.playerBody.position[0],
@@ -171,10 +162,56 @@ function onInputFired (data) {
 		x: movePlayer.playerBody.position[0],
 		y: movePlayer.playerBody.position[1],
 		angle: movePlayer.playerBody.angle,
+		size: movePlayer.size
 	}
 	
 	//send to everyone except sender 
 	this.broadcast.emit('enemy_move', moveplayerData);
+}
+
+function onPlayerCollision (data) {
+	var movePlayer = find_playerid(this.id); 
+	var enemyPlayer = find_playerid(data.id); 
+	
+	
+	if (movePlayer.dead || enemyPlayer.dead)
+		return
+	
+	if (!movePlayer || !enemyPlayer)
+		return
+
+	
+	if (movePlayer.size == enemyPlayer)
+		return
+	//the main player size is less than the enemy size
+	else if (movePlayer.size < enemyPlayer.size) {
+		var gained_size = movePlayer.size / 2;
+		enemyPlayer.size += gained_size; 
+		this.emit("killed");
+		//provide the new size the enemy will become
+		this.broadcast.emit('remove_player', {id: this.id});
+		this.broadcast.to(data.id).emit("gained", {new_size: enemyPlayer.size}); 
+		playerKilled(movePlayer);
+	} else {
+		var gained_size = enemyPlayer.size / 2;
+		movePlayer.size += gained_size;
+		this.emit('remove_player', {id: enemyPlayer.id}); 
+		this.emit("gained", {new_size: movePlayer.size}); 
+		this.broadcast.to(data.id).emit("killed"); 
+		//send to everyone except sender.
+		this.broadcast.emit('remove_player', {id: enemyPlayer.id});
+		playerKilled(enemyPlayer);
+	}
+	
+	console.log("someone ate someone!!!");
+}
+
+function playerKilled (player) {
+	player.dead = true; 
+}
+
+function getRndInteger(min, max) {
+    return Math.floor(Math.random() * (max - min + 1) ) + min;
 }
 
 //call when a client disconnects and tell the clients except sender to remove the disconnected player
@@ -224,4 +261,6 @@ io.sockets.on('connection', function(socket){
 	*/
 	//listen for new player inputs. 
 	socket.on("input_fired", onInputFired);
+	
+	socket.on("player_collision", onPlayerCollision);
 });

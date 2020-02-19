@@ -22,7 +22,6 @@ var main = function(game){
 
 function onsocketConnected () {
 	console.log("connected to server"); 
-	createPlayer();
 	gameProperties.in_game = true;
 	// send the server our initial position and tell it we are connected
 	socket.emit('new_player', {x: 0, y: 0, angle: 0});
@@ -42,9 +41,9 @@ function onRemovePlayer (data) {
 	enemies.splice(enemies.indexOf(removePlayer), 1);
 }
 
-function createPlayer () {
+function createPlayer (data) {
 	player = game.add.graphics(0, 0);
-	player.radius = 100;
+	player.radius = data.size;
 
 	// set a fill and line style
 	player.beginFill(0xffd900);
@@ -53,16 +52,29 @@ function createPlayer () {
 	player.endFill();
 	player.anchor.setTo(0.5,0.5);
 	player.body_size = player.radius; 
+	//set the initial size;
+	player.initial_size = player.radius;
+	player.type = "player_body"; 
 
 	// draw a shape
 	game.physics.p2.enableBody(player, true);
 	player.body.clearShapes();
 	player.body.addCircle(player.body_size, 0 , 0); 
 	player.body.data.shapes[0].sensor = true;
+	//enable collision and when it makes a contact with another body, call player_coll
+	player.body.onBeginContact.add(player_coll, this); 
+	
+	//camera follow
+	game.camera.follow(player, Phaser.Camera.FOLLOW_LOCKON, 0.5, 0.5);
+}
+
+//get random intenger
+function getRndInteger(min, max) {
+    return Math.floor(Math.random() * (max - min + 1) ) + min;
 }
 
 // this is the enemy class. 
-var remote_player = function (id, startx, starty, start_angle) {
+var remote_player = function (id, startx, starty, startSize, start_angle) {
 	this.x = startx;
 	this.y = starty;
 	//this is the unique socket id. We use it as a unique name for enemy
@@ -70,7 +82,8 @@ var remote_player = function (id, startx, starty, start_angle) {
 	this.angle = start_angle;
 	
 	this.player = game.add.graphics(this.x , this.y);
-	this.player.radius = 100;
+	//intialize the size with the server value
+	this.player.radius = startSize
 
 	// set a fill and line style
 	this.player.beginFill(0xffd900);
@@ -78,7 +91,11 @@ var remote_player = function (id, startx, starty, start_angle) {
 	this.player.drawCircle(0, 0, this.player.radius * 2);
 	this.player.endFill();
 	this.player.anchor.setTo(0.5,0.5);
+	//we set the initial size;
+	this.initial_size = startSize;
 	this.player.body_size = this.player.radius; 
+	this.player.type = "player_body";
+	this.player.id = this.id;
 
 	// draw a shape
 	game.physics.p2.enableBody(this.player, true);
@@ -91,7 +108,8 @@ var remote_player = function (id, startx, starty, start_angle) {
 //We create a new enemy in our game.
 function onNewPlayer (data) {
 	//enemy object 
-	var new_enemy = new remote_player(data.id, data.x, data.y, data.angle); 
+	console.log(data);
+	var new_enemy = new remote_player(data.id, data.x, data.y, data.size, data.angle); 
 	enemies.push(new_enemy);
 }
 
@@ -111,6 +129,18 @@ function onEnemyMove (data) {
 		y: data.y, 
 		worldX: data.x,
 		worldY: data.y, 
+	}
+	
+	console.log(data);
+	
+	//check if the server enemy size is not equivalent to the client
+	if (data.size != movePlayer.player.body_size) {
+		movePlayer.player.body_size = data.size; 
+		var new_scale = movePlayer.player.body_size / movePlayer.initial_size; 
+		movePlayer.player.scale.set(new_scale);
+		movePlayer.player.body.clearShapes();
+		movePlayer.player.body.addCircle(movePlayer.player.body_size, 0 , 0); 
+		movePlayer.player.body.data.shapes[0].sensor = true;
 	}
 	
 	var distance = distanceToPointer(movePlayer.player, newPointer);
@@ -140,6 +170,21 @@ function onInputRecieved (data) {
 	player.rotation = movetoPointer(player, speed, newPointer);
 
 }
+
+function onGained (data) {
+	player.body_size = data.new_size;
+	var new_scale = data.new_size/player.initial_size;
+	player.scale.set(new_scale);
+	//create new body
+	player.body.clearShapes();
+	player.body.addCircle(player.body_size, 0 , 0); 
+	player.body.data.shapes[0].sensor = true;
+}
+
+function onKilled (data) {
+	player.destroy();
+}
+
 
 //This is where we use the socket id. 
 //Search through enemies list to find the right enemy of the id.
@@ -171,6 +216,8 @@ main.prototype = {
 		console.log("client started");
 		socket.on("connect", onsocketConnected); 
 		
+		//listen for main player creation
+		socket.on("create_player", createPlayer);
 		//listen to new enemy connections
 		socket.on("new_enemyPlayer", onNewPlayer);
 		//listen to enemy movement 
@@ -179,6 +226,10 @@ main.prototype = {
 		socket.on('remove_player', onRemovePlayer); 
 		//when the player receives the new input
 		socket.on('input_recieved', onInputRecieved);
+		//when the player gets killed
+		socket.on('killed', onKilled);
+		//when the player gains in size
+		socket.on('gained', onGained);
 	},
 	
 	update: function () {
