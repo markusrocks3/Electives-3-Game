@@ -1,6 +1,8 @@
 var express = require('express');
 //require p2 physics library in the server.
 var p2 = require('p2'); 
+//get the node-uuid package for creating unique id
+var unique = require('node-uuid')
 
 var app = express();
 var serv = require('http').Server(app);
@@ -28,20 +30,47 @@ var world = new p2.World({
   gravity : [0,0]
 });
 
+//create a game class to store basic game data
+var game_setup = function() {
+	//The constant number of foods in the game
+	this.food_num = 100; 
+	//food object list
+	this.food_pickup = [];
+	//game size height
+	this.canvas_height = 4000;
+	//game size width
+	this.canvas_width = 4000; 
+}
+
+// createa a new game instance
+var game_instance = new game_setup();
+
+
 //a player class in the server
 var Player = function (startX, startY, startAngle) {
-  this.x = startX
-  this.y = startY
-  this.angle = startAngle
-  this.speed = 500;
-  //We need to intilaize with true.
-  this.sendData = true;
-  this.size = getRndInteger(40, 100); 
-  this.dead = false;
+	this.id;
+	this.x = startX;
+	this.y = startY;
+	this.angle = startAngle;
+	this.speed = 500;
+	//We need to intilaize with true.
+	this.sendData = true;
+	this.size = getRndInteger(40, 100); 
+	this.dead = false;
+}
+
+var foodpickup = function (max_x, max_y, type, id) {
+	this.x = getRndInteger(10, max_x - 10) ;
+	this.y = getRndInteger(10, max_y - 10);
+	this.type = type; 
+	this.id = id; 
+	this.powerup; 
 }
 
 //We call physics handler 60fps. The physics is calculated here. 
-setInterval(physics_hanlder, 1000/60);
+setInterval(heartbeat, 1000/60);
+
+
 
 //Steps the physics world. 
 function physics_hanlder() {
@@ -52,13 +81,43 @@ function physics_hanlder() {
     world.step(timeStep);
 }
 
+function heartbeat () {
+	
+	//the number of food that needs to be generated 
+	//in this demo, we keep the food always at 100
+	var food_generatenum = game_instance.food_num - game_instance.food_pickup.length; 
+	
+	//add the food 
+	addfood(food_generatenum);
+	//physics stepping. We moved this into heartbeat
+	physics_hanlder();
+}
+
+function addfood(n) {
+	
+	//return if it is not required to create food 
+	if (n <= 0) {
+		return; 
+	}
+	
+	//create n number of foods to the game
+	for (var i = 0; i < n; i++) {
+		//create the unique id using node-uuid
+		var unique_id = unique.v4(); 
+		var foodentity = new foodpickup(game_instance.canvas_width, game_instance.canvas_height, 'food', unique_id);
+		game_instance.food_pickup.push(foodentity); 
+		//set the food data back to client
+		io.emit("item_update", foodentity); 
+	}
+}
+
 
 // when a new player connects, we make a new instance of the player object,
 // and send a new player message to the client. 
 function onNewplayer (data) {
-	console.log(data);
 	//new player instance
 	var newPlayer = new Player(data.x, data.y, data.angle);
+	newPlayer.id = this.id;
 	
 	//create an instance of player body 
 	playerBody = new p2.Body ({
@@ -100,11 +159,17 @@ function onNewplayer (data) {
 		this.emit("new_enemyPlayer", player_info);
 	}
 	
+	//Tell the client to make foods that are exisiting
+	for (j = 0; j < game_instance.food_pickup.length; j++) {
+		var food_pick = game_instance.food_pickup[j];
+		this.emit('item_update', food_pick); 
+	}
+	
 	//send message to every connected client except the sender
 	this.broadcast.emit('new_enemyPlayer', current_info);
 	
-
 	player_lst.push(newPlayer); 
+	sortPlayerListByScore();
 }
 
 //instead of listening to player positions, we listen to user inputs 
@@ -203,10 +268,64 @@ function onPlayerCollision (data) {
 		playerKilled(enemyPlayer);
 	}
 	
+	sortPlayerListByScore();
 	console.log("someone ate someone!!!");
 }
 
+function find_food (id) {
+	for (var i = 0; i < game_instance.food_pickup.length; i++) {
+		if (game_instance.food_pickup[i].id == id) {
+			return game_instance.food_pickup[i]; 
+		}
+	}
+	
+	return false;
+}
+
+function sortPlayerListByScore() {
+	player_lst.sort(function(a,b) {
+		return b.size - a.size;
+	});
+	
+	var playerListSorted = [];
+	for (var i = 0; i < player_lst.length; i++) {
+		playerListSorted.push({id: player_lst[i].id, size: player_lst[i].size});
+	}
+	console.log(playerListSorted);
+	io.emit("leader_board", playerListSorted);
+}
+
+function onitemPicked (data) {
+	var movePlayer = find_playerid(this.id); 
+
+	var object = find_food(data.id);	
+	if (!object) {
+		console.log(data);
+		console.log("could not find object");
+		return;
+	}
+	
+	//increase player size
+	movePlayer.size += 3; 
+	//broadcast the new size
+	this.emit("gained", {new_size: movePlayer.size}); 
+	
+	game_instance.food_pickup.splice(game_instance.food_pickup.indexOf(object), 1);
+	sortPlayerListByScore();
+	console.log("item picked");
+
+	io.emit('itemremove', object); 
+	this.emit('item_picked');
+}
+
 function playerKilled (player) {
+	//find the player and remove it.
+	var removePlayer = find_playerid(player.id); 
+		
+	if (removePlayer) {
+		player_lst.splice(player_lst.indexOf(removePlayer), 1);
+	}
+	
 	player.dead = true; 
 }
 
@@ -226,6 +345,7 @@ function onClientdisconnect() {
 	
 	console.log("removing player " + this.id);
 	
+	sortPlayerListByScore();
 	//send message to every connected client except the sender
 	this.broadcast.emit('remove_player', {id: this.id});
 	
@@ -263,4 +383,7 @@ io.sockets.on('connection', function(socket){
 	socket.on("input_fired", onInputFired);
 	
 	socket.on("player_collision", onPlayerCollision);
+	
+	//listen if player got items 
+	socket.on('item_picked', onitemPicked);
 });

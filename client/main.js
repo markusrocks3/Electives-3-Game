@@ -1,5 +1,4 @@
-var socket; 
-socket = io.connect();
+var socket = io({transports: ['websocket'], upgrade: false});
 
 
 canvas_width = window.innerWidth * window.devicePixelRatio;
@@ -116,8 +115,6 @@ function onNewPlayer (data) {
 //Server tells us there is a new enemy movement. We find the moved enemy
 //and sync the enemy movement with the server
 function onEnemyMove (data) {
-	console.log("moving enemy");
-	
 	var movePlayer = findplayerbyid (data.id); 
 	
 	if (!movePlayer) {
@@ -131,7 +128,6 @@ function onEnemyMove (data) {
 		worldY: data.y, 
 	}
 	
-	console.log(data);
 	
 	//check if the server enemy size is not equivalent to the client
 	if (data.size != movePlayer.player.body_size) {
@@ -196,6 +192,72 @@ function findplayerbyid (id) {
 	}
 }
 
+//create leader board in here.
+function createLeaderBoard() {
+	var leaderBox = game.add.graphics(game.width * 0.81, game.height * 0.05);
+	leaderBox.fixedToCamera = true;
+	// draw a rectangle
+	leaderBox.beginFill(0xD3D3D3, 0.3);
+    leaderBox.lineStyle(2, 0x202226, 1);
+    leaderBox.drawRect(0, 0, 300, 400);
+	
+	var style = { font: "13px Press Start 2P", fill: "black", align: "left", fontSize: '22px'};
+	
+	leader_text = game.add.text(10, 10, "", style);
+	leader_text.anchor.set(0);
+
+	leaderBox.addChild(leader_text);
+}
+
+//leader board
+function lbupdate (data) {
+	//this is the final board string.
+	var board_string = ""; 
+	var maxlen = 10;
+	var maxPlayerDisplay = 10;
+	var mainPlayerShown = false;
+	
+	for (var i = 0;  i < data.length; i++) {
+		//if the mainplayer is shown along the iteration, set it to true
+	
+		if (mainPlayerShown && i >= maxPlayerDisplay) {
+			break;
+		}
+		
+		//if the player's rank is very low, we display maxPlayerDisplay - 1 names in the leaderboard
+		// and then add three dots at the end, and show player's rank.
+		if (!mainPlayerShown && i >= maxPlayerDisplay - 1 && socket.id == data[i].id) {
+			board_string = board_string.concat(".\n");
+			board_string = board_string.concat(".\n");
+			board_string = board_string.concat(".\n");
+			mainPlayerShown = true;
+		}
+		
+		//here we are checking if user id is greater than 10 characters, if it is 
+		//it is too long, so we're going to trim it.
+		if (data[i].id.length >= 10) {
+			var username = data[i].id;
+			var temp = ""; 
+			for (var j = 0; j < maxlen; j++) {
+				temp += username[j];
+			}
+			
+			temp += "...";
+			username = temp;
+		
+			board_string = board_string.concat(i + 1,": ");
+			board_string = board_string.concat(username," ",(data[i].size).toString() + "\n");
+		
+		} else {
+			board_string = board_string.concat("\n");
+		}
+		
+	}
+	
+	console.log(board_string);
+	leader_text.setText(board_string); 
+}
+
 main.prototype = {
 	preload: function() {
 		game.stage.disableVisibilityChange = true;
@@ -212,7 +274,8 @@ main.prototype = {
     },
 	
 	create: function () {
-		game.stage.backgroundColor = 0xE1A193;;
+		game.stage.backgroundColor = 0xE1A193;
+		
 		console.log("client started");
 		socket.on("connect", onsocketConnected); 
 		
@@ -230,6 +293,14 @@ main.prototype = {
 		socket.on('killed', onKilled);
 		//when the player gains in size
 		socket.on('gained', onGained);
+		// check for item removal
+		socket.on ('itemremove', onitemremove); 
+		// check for item update
+		socket.on('item_update', onitemUpdate); 
+		// check for leaderboard
+		socket.on ('leader_board', lbupdate); 
+		
+		createLeaderBoard();
 	},
 	
 	update: function () {
