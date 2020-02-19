@@ -17,13 +17,7 @@ app.use('/client',express.static(__dirname + '/client'));
 serv.listen(process.env.PORT || 2000);
 console.log("Server started.");
 
-var room_List = {};
-
-function game() {
-	this.room_id;
-	this.player_lst = [];
-	this.max_num = 2;
-}
+var player_lst = [];
 
 //needed for physics update 
 var startTime = (new Date).getTime();
@@ -36,18 +30,47 @@ var world = new p2.World({
   gravity : [0,0]
 });
 
+//create a game class to store basic game data
+var game_setup = function() {
+	//The constant number of foods in the game
+	this.food_num = 100; 
+	//food object list
+	this.food_pickup = [];
+	//game size height
+	this.canvas_height = 4000;
+	//game size width
+	this.canvas_width = 4000; 
+}
+
+// createa a new game instance
+var game_instance = new game_setup();
+
+
 //a player class in the server
 var Player = function (startX, startY, startAngle) {
-  this.x = startX
-  this.y = startY
-  this.angle = startAngle
-  this.speed = 500;
-  //We need to intilaize with true.
-  this.sendData = true;
+	this.id;
+	this.x = startX;
+	this.y = startY;
+	this.angle = startAngle;
+	this.speed = 500;
+	//We need to intilaize with true.
+	this.sendData = true;
+	this.size = getRndInteger(40, 100); 
+	this.dead = false;
+}
+
+var foodpickup = function (max_x, max_y, type, id) {
+	this.x = getRndInteger(10, max_x - 10) ;
+	this.y = getRndInteger(10, max_y - 10);
+	this.type = type; 
+	this.id = id; 
+	this.powerup; 
 }
 
 //We call physics handler 60fps. The physics is calculated here. 
 setInterval(heartbeat, 1000/60);
+
+
 
 //Steps the physics world. 
 function physics_hanlder() {
@@ -58,14 +81,39 @@ function physics_hanlder() {
     world.step(timeStep);
 }
 
-
 function heartbeat () {
 	
-	for (var key in room_List) {
-		var room = room_List[key];
-	}
+	//the number of food that needs to be generated 
+	//in this demo, we keep the food always at 100
+	var food_generatenum = game_instance.food_num - game_instance.food_pickup.length; 
+	
+	//add the food 
+	addfood(food_generatenum);
 	//physics stepping. We moved this into heartbeat
 	physics_hanlder();
+}
+
+function addfood(n) {
+	
+	//return if it is not required to create food 
+	if (n <= 0) {
+		return; 
+	}
+	
+	//create n number of foods to the game
+	for (var i = 0; i < n; i++) {
+		//create the unique id using node-uuid
+		var unique_id = unique.v4(); 
+		var foodentity = new foodpickup(game_instance.canvas_width, game_instance.canvas_height, 'food', unique_id);
+		game_instance.food_pickup.push(foodentity); 
+		//set the food data back to client
+		io.emit("item_update", foodentity); 
+	}
+}
+
+// when the player enters their name, trigger this function
+function onEntername (data) {
+	this.emit('join_game', {username: data.username, id: this.id});
 }
 
 
@@ -74,13 +122,8 @@ function heartbeat () {
 function onNewplayer (data) {
 	//new player instance
 	var newPlayer = new Player(data.x, data.y, data.angle);
-	var room_id = find_Roomid(); 
-	var room = room_List[room_id]; 
-	
-	//join the room; 
-	this.room_id = room_id;
-	//join the room
-	this.join(this.room_id);
+	newPlayer.id = this.id;
+	newPlayer.username = data.username;
 	
 	//create an instance of player body 
 	playerBody = new p2.Body ({
@@ -96,39 +139,49 @@ function onNewplayer (data) {
 	console.log("created new player with id " + this.id);
 	newPlayer.id = this.id; 	
 	
+	this.emit('create_player', {username:newPlayer.username, size: newPlayer.size});
+	
 	//information to be sent to all clients except sender
 	var current_info = {
 		id: newPlayer.id, 
 		x: newPlayer.x,
 		y: newPlayer.y,
 		angle: newPlayer.angle,
+		size: newPlayer.size
 	}; 
 	
-	var player_lst = room_List[this.room_id].player_lst;
-	console.log(player_lst);
 	//send to the new player about everyone who is already connected. 	
 	for (i = 0; i < player_lst.length; i++) {
 		existingPlayer = player_lst[i];
 		var player_info = {
 			id: existingPlayer.id,
+			username: existingPlayer.username,
 			x: existingPlayer.x,
 			y: existingPlayer.y, 
-			angle: existingPlayer.angle,			
+			angle: existingPlayer.angle,	
+			size: existingPlayer.size
 		};
 		console.log("pushing player");
-		console.log(player_info);
 		//send message to the sender-client only
 		this.emit("new_enemyPlayer", player_info);
 	}
 	
+	//Tell the client to make foods that are exisiting
+	for (j = 0; j < game_instance.food_pickup.length; j++) {
+		var food_pick = game_instance.food_pickup[j];
+		this.emit('item_update', food_pick); 
+	}
+	
 	//send message to every connected client except the sender
-	this.broadcast.to(room_id).emit('new_enemyPlayer', current_info);
-	room.player_lst.push(newPlayer);
+	this.broadcast.emit('new_enemyPlayer', current_info);
+	
+	player_lst.push(newPlayer); 
+	sortPlayerListByScore();
 }
 
 //instead of listening to player positions, we listen to user inputs 
 function onInputFired (data) {
-	var movePlayer = find_playerid(this.room_id, this.id); 
+	var movePlayer = find_playerid(this.id, this.room); 
 	
 	
 	if (!movePlayer || movePlayer.dead) {
@@ -185,33 +238,129 @@ function onInputFired (data) {
 	}
 	
 	//send to everyone except sender 
-	this.broadcast.to(this.room_id).emit('enemy_move', moveplayerData);
+	this.broadcast.emit('enemy_move', moveplayerData);
 }
 
-//call when a client disconnects and tell the clients except sender to remove the disconnected player
-function onClientdisconnect() {
-	var removePlayer = find_playerid(this.room_id, this.id); 
+function onPlayerCollision (data) {
+	var movePlayer = find_playerid(this.id); 
+	var enemyPlayer = find_playerid(data.id); 
 	
-	var player_lst = room_List[this.room_id].player_lst;
+	
+	if (movePlayer.dead || enemyPlayer.dead)
+		return
+	
+	if (!movePlayer || !enemyPlayer)
+		return
+
+	
+	if (movePlayer.size == enemyPlayer)
+		return
+	//the main player size is less than the enemy size
+	else if (movePlayer.size < enemyPlayer.size) {
+		var gained_size = movePlayer.size / 2;
+		enemyPlayer.size += gained_size; 
+		this.emit("killed");
+		//provide the new size the enemy will become
+		this.broadcast.emit('remove_player', {id: this.id});
+		this.broadcast.to(data.id).emit("gained", {new_size: enemyPlayer.size}); 
+		playerKilled(movePlayer);
+	} else {
+		var gained_size = enemyPlayer.size / 2;
+		movePlayer.size += gained_size;
+		this.emit('remove_player', {id: enemyPlayer.id}); 
+		this.emit("gained", {new_size: movePlayer.size}); 
+		this.broadcast.to(data.id).emit("killed"); 
+		//send to everyone except sender.
+		this.broadcast.emit('remove_player', {id: enemyPlayer.id});
+		playerKilled(enemyPlayer);
+	}
+	
+	sortPlayerListByScore();
+	console.log("someone ate someone!!!");
+}
+
+function find_food (id) {
+	for (var i = 0; i < game_instance.food_pickup.length; i++) {
+		if (game_instance.food_pickup[i].id == id) {
+			return game_instance.food_pickup[i]; 
+		}
+	}
+	
+	return false;
+}
+
+function sortPlayerListByScore() {
+	player_lst.sort(function(a,b) {
+		return b.size - a.size;
+	});
+	
+	var playerListSorted = [];
+	for (var i = 0; i < player_lst.length; i++) {
+		playerListSorted.push({id: player_lst[i].id, username: player_lst[i].username, size: player_lst[i].size});
+	}
+	
+	io.emit("leader_board", playerListSorted);
+}
+
+function onitemPicked (data) {
+	var movePlayer = find_playerid(this.id); 
+
+	var object = find_food(data.id);	
+	if (!object) {
+		console.log(data);
+		console.log("could not find object");
+		return;
+	}
+	
+	//increase player size
+	movePlayer.size += 3; 
+	//broadcast the new size
+	this.emit("gained", {new_size: movePlayer.size}); 
+	
+	game_instance.food_pickup.splice(game_instance.food_pickup.indexOf(object), 1);
+	sortPlayerListByScore();
+	console.log("item picked");
+
+	io.emit('itemremove', object); 
+	this.emit('item_picked');
+}
+
+function playerKilled (player) {
+	//find the player and remove it.
+	var removePlayer = find_playerid(player.id); 
+		
 	if (removePlayer) {
 		player_lst.splice(player_lst.indexOf(removePlayer), 1);
 	}
 	
-	//delete the room if there is no player.
-	if (player_lst.length <= 0) {
-		delete room_List[this.room_id];
+	player.dead = true; 
+}
+
+function getRndInteger(min, max) {
+    return Math.floor(Math.random() * (max - min + 1) ) + min;
+}
+
+//call when a client disconnects and tell the clients except sender to remove the disconnected player
+function onClientdisconnect() {
+	console.log('disconnect'); 
+
+	var removePlayer = find_playerid(this.id); 
+		
+	if (removePlayer) {
+		player_lst.splice(player_lst.indexOf(removePlayer), 1);
 	}
 	
+	console.log("removing player " + this.id);
 	
+	sortPlayerListByScore();
 	//send message to every connected client except the sender
-	this.broadcast.to(this.room_id).emit('remove_player', {id: this.id});
+	this.broadcast.emit('remove_player', {id: this.id});
 	
 }
 
 // find player by the the unique socket id 
-//we need the room id to find the player
-function find_playerid(room_id, id) {
-	var player_lst = room_List[room_id].player_lst;
+function find_playerid(id) {
+
 	for (var i = 0; i < player_lst.length; i++) {
 
 		if (player_lst[i].id == id) {
@@ -222,38 +371,18 @@ function find_playerid(room_id, id) {
 	return false; 
 }
 
-function find_Roomid() {
-	for (var key in room_List) {
-		var room = room_List[key];
-		if (room.player_lst.length < room.max_num) {
-			console.log(room.max_num);
-			console.log(room.player_lst.length);
-			return key;
-		}
-	}
-	
-	//did not find a room. create an extra room;
-	var room_id = create_Room();
-	return room_id;
-}
-
-function create_Room() {
-	//create new room id;
-	var new_roomid = unique.v4();
-	//create a new room object
-	var new_game = new game();
-	new_game.room_id = new_roomid;
-	
-	room_List[new_roomid] = new_game; 
-	return new_roomid;
-}
-
-
  // io connection 
 var io = require('socket.io')(serv,{});
 
 io.sockets.on('connection', function(socket){
 	console.log("socket connected"); 
+	//when the player enters their name
+	socket.on('enter_name', onEntername); 
+	
+	//whent he player logs in
+	socket.on('logged_in', function(data){
+		this.emit('enter_game', {username: data.username}); 
+	}); 
 	
 	// listen for disconnection; 
 	socket.on('disconnect', onClientdisconnect); 
@@ -266,4 +395,9 @@ io.sockets.on('connection', function(socket){
 	*/
 	//listen for new player inputs. 
 	socket.on("input_fired", onInputFired);
+	
+	socket.on("player_collision", onPlayerCollision);
+	
+	//listen if player got items 
+	socket.on('item_picked', onitemPicked);
 });

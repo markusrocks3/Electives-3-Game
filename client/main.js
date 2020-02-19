@@ -1,6 +1,3 @@
-var socket = io({transports: ['websocket'], upgrade: false});
-
-
 canvas_width = window.innerWidth * window.devicePixelRatio;
 canvas_height = window.innerHeight * window.devicePixelRatio;
 
@@ -19,12 +16,12 @@ var gameProperties = {
 var main = function(game){
 };
 
-function onsocketConnected () {
+function onsocketConnected (data) {
 	console.log("connected to server"); 
-	createPlayer();
 	gameProperties.in_game = true;
+	var username = data.username;
 	// send the server our initial position and tell it we are connected
-	socket.emit('new_player', {x: 0, y: 0, angle: 0});
+	socket.emit('new_player', {username: data.username, x: 0, y: 0, angle: 0});
 }
 
 // When the server notifies us of client disconnection, we find the disconnected
@@ -41,10 +38,9 @@ function onRemovePlayer (data) {
 	enemies.splice(enemies.indexOf(removePlayer), 1);
 }
 
-function createPlayer () {
+function createPlayer (data) {
 	player = game.add.graphics(0, 0);
-	player.radius = 100;
-	console.log("player");
+	player.radius = data.size;
 
 	// set a fill and line style
 	player.beginFill(0xffd900);
@@ -53,19 +49,33 @@ function createPlayer () {
 	player.endFill();
 	player.anchor.setTo(0.5,0.5);
 	player.body_size = player.radius; 
+	//set the initial size;
+	player.initial_size = player.radius;
+	var style = {fill: "black", align: "center"};
+	player.type = "player_body"; 
 
 	// draw a shape
 	game.physics.p2.enableBody(player, true);
 	player.body.clearShapes();
 	player.body.addCircle(player.body_size, 0 , 0); 
 	player.body.data.shapes[0].sensor = true;
+	//enable collision and when it makes a contact with another body, call player_coll
+	player.body.onBeginContact.add(player_coll, this); 
+	//player follow text
+	player.playertext = game.add.text(0, 0, data.username , style);
+	player.addChild(player.playertext);
+	
+	//camera follow
+	game.camera.follow(player, Phaser.Camera.FOLLOW_LOCKON, 0.5, 0.5);
+}
+
+//get random intenger
+function getRndInteger(min, max) {
+    return Math.floor(Math.random() * (max - min + 1) ) + min;
 }
 
 // this is the enemy class. 
-var remote_player = function (id, startx, starty, start_angle) {
-	console.log("remote player");
-	console.log(startx);
-	console.log(starty);
+var remote_player = function (id, startx, starty, startSize, start_angle) {
 	this.x = startx;
 	this.y = starty;
 	//this is the unique socket id. We use it as a unique name for enemy
@@ -73,7 +83,8 @@ var remote_player = function (id, startx, starty, start_angle) {
 	this.angle = start_angle;
 	
 	this.player = game.add.graphics(this.x , this.y);
-	this.player.radius = 100;
+	//intialize the size with the server value
+	this.player.radius = startSize
 
 	// set a fill and line style
 	this.player.beginFill(0xffd900);
@@ -81,7 +92,11 @@ var remote_player = function (id, startx, starty, start_angle) {
 	this.player.drawCircle(0, 0, this.player.radius * 2);
 	this.player.endFill();
 	this.player.anchor.setTo(0.5,0.5);
+	//we set the initial size;
+	this.initial_size = startSize;
 	this.player.body_size = this.player.radius; 
+	this.player.type = "player_body";
+	this.player.id = this.id;
 
 	// draw a shape
 	game.physics.p2.enableBody(this.player, true);
@@ -94,15 +109,14 @@ var remote_player = function (id, startx, starty, start_angle) {
 //We create a new enemy in our game.
 function onNewPlayer (data) {
 	//enemy object 
-	var new_enemy = new remote_player(data.id, data.x, data.y, data.angle); 
+	console.log(data);
+	var new_enemy = new remote_player(data.id, data.x, data.y, data.size, data.angle); 
 	enemies.push(new_enemy);
 }
 
 //Server tells us there is a new enemy movement. We find the moved enemy
 //and sync the enemy movement with the server
 function onEnemyMove (data) {
-	console.log("moving enemy");
-	
 	var movePlayer = findplayerbyid (data.id); 
 	
 	if (!movePlayer) {
@@ -114,6 +128,17 @@ function onEnemyMove (data) {
 		y: data.y, 
 		worldX: data.x,
 		worldY: data.y, 
+	}
+	
+	
+	//check if the server enemy size is not equivalent to the client
+	if (data.size != movePlayer.player.body_size) {
+		movePlayer.player.body_size = data.size; 
+		var new_scale = movePlayer.player.body_size / movePlayer.initial_size; 
+		movePlayer.player.scale.set(new_scale);
+		movePlayer.player.body.clearShapes();
+		movePlayer.player.body.addCircle(movePlayer.player.body_size, 0 , 0); 
+		movePlayer.player.body.data.shapes[0].sensor = true;
 	}
 	
 	var distance = distanceToPointer(movePlayer.player, newPointer);
@@ -139,10 +164,24 @@ function onInputRecieved (data) {
 	//does jerk. 
 	speed = distance/0.05;
 	
-	//move to the new position. 
 	player.rotation = movetoPointer(player, speed, newPointer);
 
 }
+
+function onGained (data) {
+	player.body_size = data.new_size;
+	var new_scale = data.new_size/player.initial_size;
+	player.scale.set(new_scale);
+	//create new body
+	player.body.clearShapes();
+	player.body.addCircle(player.body_size, 0 , 0); 
+	player.body.data.shapes[0].sensor = true;
+}
+
+function onKilled (data) {
+	player.destroy();
+}
+
 
 //This is where we use the socket id. 
 //Search through enemies list to find the right enemy of the id.
@@ -154,7 +193,82 @@ function findplayerbyid (id) {
 	}
 }
 
+//create leader board in here.
+function createLeaderBoard() {
+	var leaderBox = game.add.graphics(game.width * 0.81, game.height * 0.05);
+	leaderBox.fixedToCamera = true;
+	// draw a rectangle
+	leaderBox.beginFill(0xD3D3D3, 0.3);
+    leaderBox.lineStyle(2, 0x202226, 1);
+    leaderBox.drawRect(0, 0, 300, 400);
+	
+	var style = { font: "13px Press Start 2P", fill: "black", align: "left", fontSize: '22px'};
+	
+	leader_text = game.add.text(10, 10, "", style);
+	leader_text.anchor.set(0);
+
+	leaderBox.addChild(leader_text);
+}
+
+//leader board
+function lbupdate (data) {
+	//this is the final board string.
+	var board_string = ""; 
+	var maxlen = 10;
+	var maxPlayerDisplay = 10;
+	var mainPlayerShown = false;
+	
+	for (var i = 0;  i < data.length; i++) {
+		//if the mainplayer is shown along the iteration, set it to true
+	
+		if (mainPlayerShown && i >= maxPlayerDisplay) {
+			break;
+		}
+		
+		//if the player's rank is very low, we display maxPlayerDisplay - 1 names in the leaderboard
+		// and then add three dots at the end, and show player's rank.
+		if (!mainPlayerShown && i >= maxPlayerDisplay - 1 && socket.id == data[i].id) {
+			board_string = board_string.concat(".\n");
+			board_string = board_string.concat(".\n");
+			board_string = board_string.concat(".\n");
+			mainPlayerShown = true;
+		}
+		
+		//here we are checking if user id is greater than 10 characters, if it is 
+		//it is too long, so we're going to trim it.
+		if (data[i].username.length >= 10) {
+			var username = data[i].username;
+			var temp = ""; 
+			for (var j = 0; j < maxlen; j++) {
+				temp += username[j];
+			}
+			
+			temp += "...";
+			username = temp;
+		
+			board_string = board_string.concat(i + 1,": ");
+			board_string = board_string.concat(username," ",(data[i].size).toString() + "\n");
+		
+		} else {
+			board_string = board_string.concat(i + 1,": ");
+			board_string = board_string.concat(data[i].username," ",(data[i].size).toString() + "\n");
+		}
+		
+	}
+	
+	console.log(board_string);
+	leader_text.setText(board_string); 
+}
+
 main.prototype = {
+	init: function(username) {
+		// when the socket connects, call the onsocketconnected and send its information to the server 
+		socket.emit('logged_in', {username: username}); 
+		
+		// when the player enters the game 
+		socket.on('enter_game', onsocketConnected); 
+	},
+	
 	preload: function() {
 		game.stage.disableVisibilityChange = true;
 		game.scale.scaleMode = Phaser.ScaleManager.RESIZE;
@@ -170,10 +284,12 @@ main.prototype = {
     },
 	
 	create: function () {
-		game.stage.backgroundColor = 0xE1A193;;
-		console.log("client started");
-		socket.on("connect", onsocketConnected); 
+		game.stage.backgroundColor = 0xE1A193;
 		
+		console.log("client started"); 
+		
+		//listen for main player creation
+		socket.on("create_player", createPlayer);
 		//listen to new enemy connections
 		socket.on("new_enemyPlayer", onNewPlayer);
 		//listen to enemy movement 
@@ -182,6 +298,18 @@ main.prototype = {
 		socket.on('remove_player', onRemovePlayer); 
 		//when the player receives the new input
 		socket.on('input_recieved', onInputRecieved);
+		//when the player gets killed
+		socket.on('killed', onKilled);
+		//when the player gains in size
+		socket.on('gained', onGained);
+		// check for item removal
+		socket.on ('itemremove', onitemremove); 
+		// check for item update
+		socket.on('item_update', onitemUpdate); 
+		// check for leaderboard
+		socket.on ('leader_board', lbupdate); 
+		
+		createLeaderBoard();
 	},
 	
 	update: function () {
@@ -208,7 +336,8 @@ main.prototype = {
 var gameBootstrapper = {
     init: function(gameContainerElementId){
 		game.state.add('main', main);
-		game.state.start('main'); 
+		game.state.add('login', login);
+		game.state.start('login'); 
     }
 };;
 
